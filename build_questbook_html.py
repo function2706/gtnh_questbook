@@ -100,6 +100,91 @@ def load_map():
     return layout, prereq
 
 
+ITEM_NAMES = HERE / "src" / "item_names.tsv"  # 任意: 登録名\tダメージ値\t表示名 (NEI ダンプから作る)
+
+
+def load_details():
+    """クエストごとの課題・報酬を読む。
+
+    返り値: (details, reg, names)
+      details[qid] = {"t": [課題...], "r": [報酬...], "or": 1 (課題が「いずれか」のとき)}
+      アイテムは [登録名の番号, ダメージ値, 個数, 鉱石辞書名, NBT表示名] (末尾の空要素は省略)
+      reg = 登録名の一覧 (サイズ削減のため番号で参照), names = {"登録名@ダメージ値": 表示名}
+    """
+    if not QUESTDB.exists():
+        return {}, [], {}
+    reg, reg_idx = [], {}
+
+    def item(it):
+        rid = it.get("id:8", "")
+        if rid not in reg_idx:
+            reg_idx[rid] = len(reg)
+            reg.append(rid)
+        nbt_name = it.get("tag:10", {}).get("display:10", {}).get("Name:8", "")
+        e = [reg_idx[rid], it.get("Damage:2", 0), it.get("Count:3", 1), it.get("OreDict:8", ""), nbt_name]
+        while e and e[-1] == "":
+            e.pop()
+        return e
+
+    def items(d):
+        return [item(v) for _, v in sorted(d.items(), key=lambda kv: int(kv[0].split(":")[0]))]
+
+    def ordered(d):
+        return [v for _, v in sorted(d.items(), key=lambda kv: int(kv[0].split(":")[0]))]
+
+    details = {}
+    for f in (QUESTDB / "Quests").glob("*/*.json"):
+        q = json.loads(f.read_text(encoding="utf-8"))
+        props = q["properties:10"]["betterquesting:10"]
+        tasks = []
+        for t in ordered(q.get("tasks:9", {})):
+            kind = t.get("taskID:8", "").split(":")[-1]
+            if kind in ("retrieval", "optional_retrieval"):
+                tasks.append({"k": "item", "opt": int(kind == "optional_retrieval"), "use": t.get("consume:1", 0),
+                              "one": t.get("requireOnlyOneItem:1", 0), "i": items(t.get("requiredItems:9", {}))})
+            elif kind == "crafting":
+                tasks.append({"k": "craft", "i": items(t.get("requiredItems:9", {}))})
+            elif kind == "checkbox":
+                tasks.append({"k": "check"})
+            elif kind in ("hunt", "meeting"):
+                tasks.append({"k": kind, "e": t.get("target:8", ""), "n": t.get("required:3", t.get("amount:3", 1))})
+            elif kind == "location":
+                tasks.append({"k": "loc", "name": t.get("name:8", ""), "dim": t.get("dimension:3", 0),
+                              "hide": int(bool(t.get("hideInfo:1", 0)))})
+            elif kind == "fluid":
+                tasks.append({"k": "fluid", "use": t.get("consume:1", 0),
+                              "f": [[v.get("FluidName:8", ""), v.get("Amount:3", 0)]
+                                    for v in ordered(t.get("requiredFluids:9", {}))]})
+            else:
+                tasks.append({"k": "other", "name": t.get("taskID:8", "")})
+        rewards = []
+        for r in ordered(q.get("rewards:9", {})):
+            kind = r.get("rewardID:8", "").split(":")[-1]
+            if kind == "item":
+                rewards.append({"k": "item", "i": items(r.get("rewards:9", {}))})
+            elif kind == "choice":
+                rewards.append({"k": "choice", "i": items(r.get("choices:9", {}))})
+            elif kind == "xp":
+                rewards.append({"k": "xp", "n": r.get("amount:3", 0), "lv": r.get("isLevels:1", 0)})
+            elif kind == "questcompletion":
+                qid = r.get("questID:8", "").rstrip("=").replace("+", "-").replace("/", "_")
+                rewards.append({"k": "qc", "q": qid})
+            else:
+                rewards.append({"k": "other", "name": r.get("rewardID:8", "")})
+        d = {"t": tasks, "r": rewards}
+        if props.get("taskLogic:8", "AND") == "OR" and len(tasks) > 1:
+            d["or"] = 1
+        details[bq_id(q["questIDHigh:4"], q["questIDLow:4"])] = d
+
+    names = {}
+    if ITEM_NAMES.exists():
+        for line in ITEM_NAMES.read_text(encoding="utf-8-sig").splitlines():
+            p = line.split("\t")
+            if len(p) >= 3 and p[0] in reg_idx:
+                names[f"{p[0]}@{p[1]}"] = p[2]
+    return details, reg, names
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")  # sync_gui から呼ばれたとき日本語ログを化けさせない
     ja_src = sys.argv[1] if len(sys.argv) > 2 else BASE + JA_PATH
@@ -162,11 +247,17 @@ def main():
         if prereq.get(qid):
             q["p"] = prereq[qid]
 
-    data = {"chapters": out_ch, "quests": quests, "built": date.today().isoformat()}
+    details, reg, names = load_details()
+    for qid, q in quests.items():
+        if qid in details:
+            q["d"] = details[qid]
+
+    data = {"chapters": out_ch, "quests": quests, "reg": reg, "names": names, "built": date.today().isoformat()}
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     html = TEMPLATE.read_text(encoding="utf-8").replace("/*__DATA__*/", payload)
     OUT.write_text(html, encoding="utf-8")
     cnt = [sum(1 for q in quests.values() if q["t"] == t) for t in (0, 1, 2)]
+    print(f"details: quests={sum(1 for q in quests.values() if 'd' in q)} item_ids={len(reg)} named={len(names)}")
     print(f"map: chapters={sum(1 for c in out_ch if 'map' in c)} prereq={sum(1 for q in quests.values() if 'p' in q)}")
     print(f"chapters={len(out_ch)} quests={len(quests)} untranslated={cnt[0]} official={cnt[1]} ai={cnt[2]} -> {OUT}")
     print(f"ai_stale={len(stale)} (英語原文が更新されたため AI訳を外した項目数)")
