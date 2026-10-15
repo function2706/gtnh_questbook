@@ -1,0 +1,5 @@
+__pycache__/
+# クエスト定義はデータ取得用の別クローン (sync_gui.pyw / README 参照)
+src/modpack/
+*.bak
+*.tmp
