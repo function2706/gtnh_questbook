@@ -235,24 +235,36 @@ function fmt(raw, hl) {
   s = s.replace(/\[(\/?)(bold)\]/g, (m, c) => c ? '</b>' : '<b>');
   s = s.replace(/\[note\]/g, '<span class="note">').replace(/\[\/note\]/g, '</span>');
   s = s.replace(/\[warn\]/g, '<span class="warn">').replace(/\[\/warn\]/g, '</span>');
-  s = s.replace(/%n/g, '\n');
   // § コード: 色/装飾をspanで表現。タグ境界を壊さないよう、HTMLタグ・改行ごとにリセット
-  let out = '', color = '', fl = new Set(), open = false;
+  // color: § の色コード(0-f) または &#RRGGBB、grad: &g / &z のグラデーション
+  let out = '', color = '', grad = '', fl = new Set(), open = false;
   const openSpan = () => {
-    const cls = []; if (color) cls.push('c'); fl.forEach(f => cls.push('f-' + f));
-    if (cls.length) { out += `<span class="${[...fl].map(f => 'f-' + f).join(' ')}"${color ? ` style="color:var(--c${color})"` : ''}>`; open = true; }
+    const css = [];
+    if (grad) css.push(`background-image:${grad};-webkit-background-clip:text;background-clip:text;color:transparent`);
+    else if (color) css.push(color[0] === '#' ? `color:${color}` : `color:var(--c${color})`);
+    if (css.length || fl.size) { out += `<span class="${[...fl].map(f => 'f-' + f).join(' ')}"${css.length ? ` style="${css.join(';')}"` : ''}>`; open = true; }
   };
   const close = () => { if (open) { out += '</span>'; open = false; } };
-  const parts = s.split(/(<[^>]+>|\n|§.)/);
+  const AMP = /^&amp;(?:g&amp;#([0-9A-Fa-f]{6})&amp;#([0-9A-Fa-f]{6})|#([0-9A-Fa-f]{6})|([zq])|r)$/;
+  const parts = s.split(/(<[^>]+>|\n|§.|&amp;g&amp;#[0-9A-Fa-f]{6}&amp;#[0-9A-Fa-f]{6}|&amp;#[0-9A-Fa-f]{6}|&amp;[zq]|&amp;r(?=\n|§|$))/);
   for (const p of parts) {
     if (!p) continue;
     if (p[0] === '§' && p.length === 2) {
       const c = p[1].toLowerCase();
       close();
-      if (/[0-9a-f]/.test(c)) { color = c; fl = new Set(); }
-      else if (c === 'r') { color = ''; fl = new Set(); }
+      if (/[0-9a-f]/.test(c)) { color = c; grad = ''; fl = new Set(); }
+      else if (c === 'r') { color = ''; grad = ''; fl = new Set(); }
       else if ('klmno'.includes(c)) fl.add(c);
       continue;
+    }
+    const am = p.startsWith('&amp;') && p.match(AMP);
+    if (am) {
+      close();
+      if (am[1]) grad = `linear-gradient(90deg,#${am[1]},#${am[2]})`;
+      else if (am[3]) { color = '#' + am[3]; grad = ''; }
+      else if (am[4] === 'z') grad = 'linear-gradient(90deg,#e33,#e93,#cc3,#3b3,#3bc,#36e,#a3e)';
+      else if (!am[4]) { color = ''; grad = ''; fl = new Set(); }  // &r
+      continue;  // &q は表示上の意味が不明なので記号だけ除去
     }
     if (p === '\n' || p[0] === '<') { close(); out += p === '\n' ? '<br>' : p; continue; }
     if (!open) openSpan();
@@ -372,7 +384,7 @@ function renderChapter(focus) {
 }
 
 // 検索用のプレーンテキスト: 書式コード・タグを除き、改行は空白に
-const plain = s => (s || '').replace(/§./g, '').replace(/%n/g, ' ').replace(/\[\/?[a-z]+\]/g, '').replace(/\s+/g, ' ').trim();
+const plain = s => (s || '').replace(/&g&#[0-9A-Fa-f]{6}&#[0-9A-Fa-f]{6}|&#[0-9A-Fa-f]{6}|&[zq]|&r(?=\n|§|$)/g, '').replace(/§./g, '').replace(/\n/g, ' ').replace(/\[\/?[a-z]+\]/g, '').replace(/\s+/g, ' ').trim();
 const reEsc = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // 本文からヒット箇所の前後を最大 2 か所抜き出す

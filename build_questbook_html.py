@@ -68,6 +68,14 @@ def parse(text):
     return values, chapters
 
 
+LANG_ESC = re.compile(r"%%|%n|\\\\")
+
+
+def unescape(v):
+    """lang の表記を実際の文字に戻す: %n→改行, %%→%, \\\\→\\ (元のクエスト定義 JSON と照合して確認済み)"""
+    return LANG_ESC.sub(lambda m: {"%%": "%", "%n": "\n"}.get(m.group(0), "\\"), v)
+
+
 def bq_id(high, low):
     """BetterQuesting の (high, low) 64bit 対を lang 側の URL-safe base64 ID に変換"""
     n = ((high & (2**64 - 1)) << 64) | (low & (2**64 - 1))
@@ -215,7 +223,8 @@ def main():
         # t: 0=未訳, 1=公式(コミュニティ)訳, 2=AI訳を含む
         tr = not (de.strip() and dj == de) and not (not de.strip() and nj == ne)
         is_ai = (kind, qid, "name") in ai_used or (kind, qid, "desc") in ai_used
-        return {"nj": nj, "ne": ne, "dj": dj, "de": de, "t": 2 if (tr and is_ai) else int(tr)}
+        return {"nj": unescape(nj), "ne": unescape(ne), "dj": unescape(dj), "de": unescape(de),
+                "t": 2 if (tr and is_ai) else int(tr)}
 
     quests, out_ch = {}, []
     for ch in chapters:
