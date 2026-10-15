@@ -171,7 +171,7 @@ python build_questbook_html.py src/ja_JP.lang src/en_US.lang   # 手元のファ
 | `split_untranslated.py` / `check_translation.py` / `unify_terms.py` | 翻訳作業用スクリプト |
 | `src/ja_JP.lang` / `src/en_US.lang` | 公式の日本語訳・英語原文 |
 | `src/modpack/` | クエスト定義（GT-New-Horizons-Modpack の一部。git 管理外） |
-| `src/item_names.tsv` | （任意）アイテム名の対応表。`登録名<TAB>ダメージ値<TAB>表示名` |
+| `src/item_names.tsv` | アイテム名の対応表（`make_item_names.py` で NEI のダンプから生成）。`登録名<TAB>ダメージ値<TAB>表示名` |
 | `work/in/` `work/out/` | AI 翻訳の入力（元の英語）と出力 |
 | `work/glossary.tsv` | 公式訳から抽出した用語集 |
 | `work/patch_*.py` ほか | 開発時に使った一回限りの変更スクリプト（記録用） |
@@ -184,7 +184,11 @@ lang ファイルでは `%n`＝改行、`%%`＝「%」、`\\`＝「\」です。
 
 ## 7. 既知の制限
 
-- **アイテム名が ID 表示**：クエスト定義には登録名とダメージ値しかなく、特に GregTech のアイテム名はゲーム起動時に組み立てられるため、データから名前を引けません。ゲーム内の NEI で Tools → Data Dumps →「Item Panel」を CSV で書き出し、`dumps\itempanel.csv` を用意できれば、`src/item_names.tsv` に変換して名前表示に対応できます（未対応）。
+- **アイテム名が一部 ID 表示**：クエスト定義には登録名とダメージ値しかないため、名前はゲーム内 NEI のダンプから作った対応表 `src/item_names.tsv` で表示しています。現在はクエストに出てくるアイテムの約 6 割に名前が付き、残り（主に GregTech の機械など）は ID 表示です。
+  - 対応表の作り方：ゲーム内で NEI の Options → Tools → Data Dumps を実行し、出力された `dumps` フォルダを指定して
+    `python make_item_names.py <dumpsフォルダ>` → `python build_questbook_html.py`
+  - 使うのは `itempanel.csv`（最優先）・`oredict.csv`・`item.csv`。**Item Panel のダンプは NEI の検索欄を空にしてから**実行すると全アイテムが出力され、名前の付く割合が上がります。
+  - ゲームの言語を日本語にしてダンプすると、アイテム名も日本語になります。
 - **アイコンなし**：マップのノードはアイコンではなく四角と番号で表示します。
 - **AI 訳の品質**：AI 訳は書式の検査は通していますが、人の目で内容を確認したものではありません。気になる箇所は「対訳」表示で英語原文と見比べてください。
 - **ページ上での同期は未対応**：同期は同期ツールで行います。
