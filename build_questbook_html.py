@@ -26,6 +26,9 @@ EN_PATH = "daily-history/config/txloader/forceload/betterquesting/lang/en_US.lan
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "GTNH_QuestBook_ja.html"
 TEMPLATE = HERE / "template.html"
+PROGRESS_TEMPLATE = HERE / "progress_template.html"
+PROGRESS_OUT = HERE / "GTNH_QuestProgress.html"
+DATA_JS = HERE / "questdata.js"
 # クエストマップ用: GT-New-Horizons-Modpack の config/betterquesting/DefaultQuests (sparse clone)
 QUESTDB = HERE / "src" / "modpack" / "config" / "betterquesting" / "DefaultQuests"
 
@@ -182,6 +185,9 @@ def load_details():
         d = {"t": tasks, "r": rewards}
         if props.get("taskLogic:8", "AND") == "OR" and len(tasks) > 1:
             d["or"] = 1
+        # 前提クエストの条件 (OR = どれか1つ完了で解放)
+        if props.get("questLogic:8", "AND") == "OR":
+            d["pl"] = "or"
         details[bq_id(q["questIDHigh:4"], q["questIDLow:4"])] = d
 
     names = {}
@@ -262,9 +268,12 @@ def main():
             q["d"] = details[qid]
 
     data = {"chapters": out_ch, "quests": quests, "reg": reg, "names": names, "built": date.today().isoformat()}
-    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    html = TEMPLATE.read_text(encoding="utf-8").replace("/*__DATA__*/", payload)
-    OUT.write_text(html, encoding="utf-8")
+    # データは questdata.js に1本化し、閲覧用・進行用の両ページから読み込む
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    DATA_JS.write_text("window.QDATA=" + payload + ";\n", encoding="utf-8")
+    OUT.write_text(TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8")
+    if PROGRESS_TEMPLATE.exists():
+        PROGRESS_OUT.write_text(PROGRESS_TEMPLATE.read_text(encoding="utf-8"), encoding="utf-8")
     cnt = [sum(1 for q in quests.values() if q["t"] == t) for t in (0, 1, 2)]
     print(f"details: quests={sum(1 for q in quests.values() if 'd' in q)} item_ids={len(reg)} named={len(names)}")
     print(f"map: chapters={sum(1 for c in out_ch if 'map' in c)} prereq={sum(1 for q in quests.values() if 'p' in q)}")

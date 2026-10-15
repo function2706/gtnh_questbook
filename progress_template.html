@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTNH クエスト進行</title>
+<link rel="stylesheet" href="qb_common.css">
+<style>
+/* ---- 進行モード固有 ---- */
+.pbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.pbar .sum{color:var(--muted)}
+.st-badge{flex:none;font-size:11px;padding:1px 8px;border-radius:10px;border:1px solid var(--line);white-space:nowrap}
+.st-badge.open{border-color:var(--accent);color:var(--accent)}
+.st-badge.done{border-color:var(--c2);color:var(--c2)}
+.st-badge.new{background:var(--accent);border-color:var(--accent);color:#fff}
+.qbtn{flex:none;font-size:12px;padding:2px 10px;border-radius:6px;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:#fff;font-family:inherit}
+.qbtn.undo{background:transparent;color:var(--muted);border-color:var(--line)}
+details.q.done>summary .nm{opacity:.6}
+details.q.fresh{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+nav .cnt{display:flex;gap:6px}
+nav .cnt b{font-weight:600;color:var(--accent)}
+nav a.lock{opacity:.45}
+nav .bar i.done{background:var(--c2)}
+.node.open rect{fill:var(--accent-soft);stroke:var(--accent)}
+.node.done rect{fill:var(--panel);stroke:var(--c2);stroke-dasharray:3 2}
+.node.done .no{fill:var(--c2)}
+.node.fresh rect{stroke-width:4}
+.allhead{margin:18px 0 6px;font-size:14px;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:2px}
+.help{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;font-size:14px;margin:10px 0}
+#file{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>GTNH クエスト進行<small>疑似プレイ</small></h1>
+  <div class="tools">
+    <div class="seg" id="mode">
+      <button data-m="ja" class="on">日本語</button><button data-m="both">対訳</button><button data-m="en">English</button>
+    </div>
+    <label><input type="checkbox" id="showDone"> クリア済みを表示</label>
+    <details class="opts"><summary class="btn">表示項目 ▾</summary><div class="menu">
+      <label><input type="checkbox" data-opt="task"> 課題・必要アイテム</label>
+      <label><input type="checkbox" data-opt="reward"> 報酬</label>
+      <label><input type="checkbox" data-opt="rel"> 前提・後続クエスト</label>
+    </div></details>
+    <details class="opts"><summary class="btn">進行データ ▾</summary><div class="menu">
+      <button class="btn" id="export">書き出し (JSON)</button>
+      <button class="btn" id="import">読み込み…</button>
+      <button class="btn" id="reset">最初からやり直す</button>
+    </div></details>
+    <a class="btn" href="GTNH_QuestBook_ja.html" style="text-decoration:none">閲覧モードへ</a>
+    <button class="btn" id="theme" title="テーマ切替">◐</button>
+    <input type="file" id="file" accept="application/json,.json">
+  </div>
+</header>
+<div class="layout">
+  <nav id="nav"></nav>
+  <main>
+    <select id="chapsel"></select>
+    <div id="view"></div>
+    <footer>
+      進行状況はこのブラウザ内に保存されます（「進行データ」から書き出し・読み込み可）。
+      データ: GTNewHorizons/GTNH-Translations・GT-New-Horizons-Modpack。生成日: <span id="built"></span>
+    </footer>
+  </main>
+</div>
+<script src="questdata.js"></script>
+<script src="qb_common.js"></script>
+<script>
+// ---- 状態 ----
+const ALL = '_avail';  // 擬似章: 全章の「挑戦可能」一覧
+const st = { mode: 'ja', view: 'list', ch: ALL, showDone: true, labels: true, show: { task: true, reward: true, rel: true } };
+let cleared = new Set(), fresh = new Set();
+const PK = 'gtnhqp', DK = 'gtnhqp-progress';
+try {
+  const s = JSON.parse(localStorage.getItem(PK) || '{}');
+  ['mode', 'view', 'showDone', 'labels'].forEach(k => { if (k in s) st[k] = s[k]; });
+  if (s.show) Object.assign(st.show, s.show);
+  if (s.theme) document.documentElement.dataset.theme = s.theme;
+  cleared = new Set((JSON.parse(localStorage.getItem(DK) || '{}').cleared || []).filter(id => Q[id]));
+} catch (e) {}
+const savePrefs = () => { try { localStorage.setItem(PK, JSON.stringify({ mode: st.mode, view: st.view, showDone: st.showDone, labels: st.labels, show: st.show, theme: document.documentElement.dataset.theme || '' })); } catch (e) {} };
+const saveProgress = () => { try { localStorage.setItem(DK, JSON.stringify({ cleared: [...cleared] })); } catch (e) {} };
+document.getElementById('built').textContent = D.built;
+
+// 進行対象: どこかの章のマップに載っているクエスト (トリガー用の章外クエストは除く)
+const CHS = CH.filter(c => c.map);
+const inBook = new Set(CHS.flatMap(c => c.q));
+function chName(c) { return c.id === ALL ? '挑戦可能なクエスト（全章）' : strip(st.mode === 'en' && c.ne ? c.ne : (c.nj || c.ne)); }
+
+// ---- 解放判定 ----
+// 前提クエスト (ブックに載っているもの) が AND/OR 条件を満たせば解放
+function prereqs(id) { return ((Q[id] && Q[id].p) || []).map(p => p[0]).filter(p => inBook.has(p)); }
+function unlocked(id) {
+  const pre = prereqs(id);
+  if (!pre.length) return true;
+  return (Q[id].d && Q[id].d.pl === 'or') ? pre.some(p => cleared.has(p)) : pre.every(p => cleared.has(p));
+}
+const isDone = id => cleared.has(id);
+const isOpen = id => !cleared.has(id) && unlocked(id);
+const visible = id => isOpen(id) || (st.showDone && isDone(id));
+
+function clearQuest(id) {
+  const before = new Set([...inBook].filter(isOpen));
+  cleared.add(id);
+  fresh = new Set([...inBook].filter(k => isOpen(k) && !before.has(k)));
+  saveProgress(); rerender(id);
+}
+function undoQuest(id) {
+  // 取り消すと解放条件を満たさなくなるクリア済みクエストも連鎖して取り消す
+  const next = new Set(cleared); next.delete(id);
+  let changed = true;
+  const ok = k => { const pre = prereqs(k); if (!pre.length) return true; return (Q[k].d && Q[k].d.pl === 'or') ? pre.some(p => next.has(p)) : pre.every(p => next.has(p)); };
+  while (changed) { changed = false; for (const k of next) if (!ok(k)) { next.delete(k); changed = true; } }
+  const lost = cleared.size - next.size - 1;
+  if (lost > 0 && !confirm(`このクエストを取り消すと、後続のクリア済みクエスト ${lost} 件も未クリアに戻ります。よろしいですか？`)) return;
+  cleared = next; fresh = new Set(); saveProgress(); rerender(id);
+}
+
+// ---- 章ナビ ----
+const nav = document.getElementById('nav'), sel = document.getElementById('chapsel'), view = document.getElementById('view');
+function chStat(c) {
+  let done = 0, open = 0;
+  for (const id of c.q) { if (isDone(id)) done++; else if (unlocked(id)) open++; }
+  return { done, open, n: c.q.length };
+}
+function renderNav() {
+  const totalOpen = [...inBook].filter(isOpen).length;
+  const rows = [`<a href="#c=${ALL}" class="${st.ch === ALL ? 'on' : ''}">挑戦可能なクエスト（全章）<div class="sub"><span class="cnt"><b>${totalOpen}</b> 件</span><span>クリア ${cleared.size} / ${inBook.size}</span></div></a>`];
+  const opts = [`<option value="${ALL}">挑戦可能なクエスト（全章・${totalOpen}件）</option>`];
+  for (const c of CHS) {
+    const s = chStat(c), lock = !s.done && !s.open, pct = s.n ? s.done / s.n * 100 : 0;
+    rows.push(`<a href="#c=${c.id}" class="${c.id === st.ch ? 'on' : ''}${lock ? ' lock' : ''}">${esc(chName(c))}
+      <div class="sub"><span class="cnt">${s.open ? `<b>挑戦可 ${s.open}</b>` : lock ? '未解放' : ''}</span><span>${s.done} / ${s.n}</span></div><div class="bar"><i class="done" style="width:${pct}%"></i></div></a>`);
+    opts.push(`<option value="${c.id}"${c.id === st.ch ? ' selected' : ''}>${esc(chName(c))}（${s.done}/${s.n}${s.open ? `・挑戦可${s.open}` : ''}）</option>`);
+  }
+  nav.innerHTML = rows.join('');
+  sel.innerHTML = opts.join('');
+  sel.value = st.ch;
+}
+sel.onchange = () => { location.hash = 'c=' + sel.value; };
+
+// ---- カード ----
+function pCard(id, idx, openIt) {
+  const q = Q[id]; if (!q) return '';
+  const done = isDone(id), nm = st.mode === 'en' ? q.ne : (q.nj || q.ne);
+  const sub = st.mode === 'both' && q.ne && strip(q.ne) !== strip(q.nj) ? `<span class="ne">${fmt(q.ne)}</span>` : '';
+  const body = st.mode === 'both'
+    ? `<div class="cols"><div><div class="colh">日本語</div><div class="desc">${fmt(q.dj)}</div></div><div><div class="colh">English</div><div class="desc">${fmt(q.de)}</div></div></div>`
+    : `<div class="desc">${fmt(st.mode === 'en' ? q.de : q.dj)}</div>`;
+  const badge = done ? '<span class="st-badge done">クリア済み</span>' : fresh.has(id) ? '<span class="st-badge new">NEW</span>' : '<span class="st-badge open">挑戦可能</span>';
+  const btn = done ? `<button class="qbtn undo" data-undo="${id}">取り消し</button>` : `<button class="qbtn" data-clear="${id}">クリア</button>`;
+  return `<details class="q${done ? ' done' : ''}${fresh.has(id) ? ' fresh' : ''}" id="q-${id}"${openIt ? ' open' : ''}><summary>${idx != null ? `<span class="num">${idx}</span>` : ''}<span class="nm">${fmt(nm)}${sub}</span>${badge}${btn}</summary>
+    <div class="body">${body}${extraHtml(id)}<div class="qid">ID: ${id}${mapOf[id] ? `<a class="tomap" href="#m=${id}">マップで見る</a>` : ''}</div></div></details>`;
+}
+
+// ---- 一覧表示 ----
+function renderAll(focus) {
+  document.querySelector('main').classList.remove('wide');
+  const open = [...inBook].filter(isOpen);
+  let html = `<div class="chtop"><div class="chhead"><h2>挑戦可能なクエスト</h2><div class="en">全章で今クリアできるクエスト ${open.length} 件 ／ クリア済み ${cleared.size} / ${inBook.size}</div></div></div>`;
+  if (!cleared.size) html += `<div class="help">前提クエストのないクエストだけが表示されています。「クリア」を押すとそのクエストを達成したことになり、後続クエストが解放されて現れます。進行状況はブラウザに保存されます。</div>`;
+  for (const c of CHS) {
+    const ids = c.q.filter(id => isOpen(id) && mapOf[id] === c.id);
+    if (!ids.length) continue;
+    html += `<div class="allhead">${esc(chName(c))}（${ids.length}）</div>` + ids.map(id => pCard(id, c.q.indexOf(id) + 1, id === focus)).join('');
+  }
+  view.innerHTML = html + (open.length ? '' : '<div class="empty">挑戦可能なクエストはありません</div>');
+}
+
+function renderChapter(focus) {
+  if (st.ch === ALL) return renderAll(focus);
+  const c = CHS.find(x => x.id === st.ch) || CHS[0];
+  const s = chStat(c);
+  const head = `<div class="chtop"><div class="chhead"><h2>${fmt(st.mode === 'en' && c.ne ? c.ne : c.nj)}</h2>${st.mode !== 'en' && c.ne ? `<div class="en">${esc(strip(c.ne))}</div>` : ''}</div>
+    <div class="seg viewseg"><button data-v="list" class="${st.view !== 'map' ? 'on' : ''}">リスト</button><button data-v="map" class="${st.view === 'map' ? 'on' : ''}">マップ</button></div></div>
+    <div class="meta pbar"><span class="sum">クリア ${s.done} / ${s.n} ／ 挑戦可能 ${s.open} ／ 未解放 ${s.n - s.done - s.open}</span>${s.open ? `<button class="btn" data-clearall>この章の挑戦可能をすべてクリア</button>` : ''}</div>`;
+  if (st.view === 'map') {
+    document.querySelector('main').classList.add('wide');
+    view.innerHTML = head + '<div class="mapwrap"></div>';
+    renderMap(c, focus); return;
+  }
+  document.querySelector('main').classList.remove('wide');
+  const ids = c.q.map((id, i) => [id, i + 1]).filter(([id]) => visible(id));
+  view.innerHTML = head + (ids.map(([id, i]) => pCard(id, i, id === focus)).join('') || '<div class="empty">この章にはまだ解放されたクエストがありません</div>');
+  if (focus) requestAnimationFrame(() => { const el = document.getElementById('q-' + focus); if (el) el.scrollIntoView({ block: 'start' }); });
+}
+
+// ---- マップ (表示中のクエストだけを描く) ----
+function renderMap(c, focus) {
+  const nodes = c.map.filter(n => Q[n[0]] && visible(n[0])), pos = {};
+  nodes.forEach(n => pos[n[0]] = n);
+  const idx = {}; c.q.forEach((id, i) => idx[id] = i + 1);
+  const box = view.querySelector('.mapwrap');
+  if (!nodes.length) { box.innerHTML = '<div class="empty" style="padding:30px">この章にはまだ解放されたクエストがありません</div>'; return; }
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  nodes.forEach(([, x, y, w, hh]) => { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + hh); });
+  const cx = n => n[1] + n[3] / 2, cy = n => n[2] + n[4] / 2;
+  const qname = id => strip(st.mode === 'en' ? Q[id].ne : (Q[id].nj || Q[id].ne));
+  const edges = [];
+  nodes.forEach(([id]) => (Q[id].p || []).forEach(([pid, ty]) => { if (pos[pid] && ty !== 2) edges.push([pid, id, ty]); }));
+  const edgeSvg = edges.map(([a, b, ty]) => {
+    const A = pos[a], B = pos[b], x1 = cx(A), y1 = cy(A), x2 = cx(B), y2 = cy(B), dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1;
+    const r = Math.min(B[3], B[4]) / 2 + 3, r0 = Math.min(A[3], A[4]) / 2;
+    return `<line class="edge${ty === 1 ? ' imp' : ''}" data-a="${a}" data-b="${b}" x1="${x1 + dx / L * r0}" y1="${y1 + dy / L * r0}" x2="${x2 - dx / L * r}" y2="${y2 - dy / L * r}" marker-end="url(#arr)"/>`;
+  }).join('');
+  const nodeSvg = nodes.map(([id, x, y, w, hh]) => {
+    const cls = isDone(id) ? 'done' : 'open';
+    return `<g class="node ${cls}${fresh.has(id) ? ' fresh' : ''}" data-id="${id}"><rect x="${x}" y="${y}" width="${w}" height="${hh}"/>`
+      + `<text class="no" x="${x + w / 2}" y="${y + hh / 2}">${isDone(id) ? '✓' : idx[id] || ''}</text><text class="lb" x="${x + w / 2}"></text></g>`;
+  }).join('');
+  box.innerHTML = `<div class="maptools"><button class="btn" data-z="in">＋</button><button class="btn" data-z="out">－</button><button class="btn" data-z="fit">全体</button>
+      <label class="btn" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="lbl" ${st.labels ? 'checked' : ''}>名前</label>
+      <span class="legend"><span><i style="background:var(--accent-soft);border-color:var(--accent)"></i>挑戦可能</span><span><i style="background:var(--panel);border-color:var(--c2)"></i>クリア済み</span></span></div>
+    <svg class="${st.labels ? '' : 'nolabel'}"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="var(--muted)"/></marker></defs>
+      <g class="vp">${edgeSvg}${nodeSvg}</g></svg><div class="maptip" hidden></div><aside class="mapside" hidden></aside>`;
+  const svg = box.querySelector('svg'), vp = svg.querySelector('.vp'), side = box.querySelector('.mapside'), tip = box.querySelector('.maptip');
+  const S = { k: 1, tx: 0, ty: 0 };
+
+  // タイトル: 画面上 11px 固定、周囲と重ならない幅だけ表示 (閲覧ページと同じ方式)
+  const FS = 11, LH = 14, MAXW = 150;
+  const items = [...vp.querySelectorAll('.node')].map(g => { const n = pos[g.dataset.id]; return { el: g.querySelector('.lb'), name: qname(n[0]), cx: cx(n), x: n[1], y: n[2], w: n[3], h: n[4] }; });
+  const cw = ch => ch.charCodeAt(0) > 0x2e7f ? 1 : 0.58;
+  const fitText = (s, em) => { let w = 0; for (const ch of s) w += cw(ch); if (w <= em) return s;
+    let out = ''; w = 0; for (const ch of s) { if (w + cw(ch) > em - 1) break; out += ch; w += cw(ch); } return out ? out + '…' : ''; };
+  let lblTimer = 0, lastK = 0;
+  function layoutLabels() {
+    if (!st.labels || Math.abs(S.k - lastK) < 1e-6) return;
+    lastK = S.k; const k = S.k, fs = FS / k, band = LH / k, pad = 4 / k;
+    for (const a of items) {
+      const top = a.y + a.h + 1 / k, bot = top + band; let half = MAXW / 2 / k;
+      for (const b of items) {
+        if (b === a) continue; const dx = Math.abs(b.cx - a.cx); if (dx > half * 2 + b.w) continue;
+        if (b.y < bot && b.y + b.h > top) half = Math.min(half, dx - b.w / 2 - pad);
+        const bt = b.y + b.h + 1 / k; if (bt < bot && bt + band > top) half = Math.min(half, dx / 2 - pad);
+      }
+      const txt = half > 0 ? fitText(a.name, half * 2 / fs) : '';
+      a.el.textContent = txt.replace('…', '').length >= 3 || txt === a.name ? txt : '';
+      a.el.setAttribute('y', top + fs * 0.95); a.el.setAttribute('font-size', fs); a.el.setAttribute('stroke-width', 3 / k);
+    }
+  }
+  const apply = () => { vp.setAttribute('transform', `translate(${S.tx},${S.ty}) scale(${S.k})`); clearTimeout(lblTimer); lblTimer = setTimeout(layoutLabels, 80); };
+  const fit = () => {
+    // 描画直後はサイズが 0 のことがあるので、測れるまで次フレームで再試行
+    const { width: W, height: H } = box.getBoundingClientRect(), p = 30;
+    if (W < 100 || H < 100) { requestAnimationFrame(fit); return; }
+    S.k = Math.min((W - p * 2) / (maxX - minX + 20), (H - p * 2 - 30) / (maxY - minY + 20), 3);
+    S.tx = (W - (maxX - minX) * S.k) / 2 - minX * S.k; S.ty = p + 30 - minY * S.k; apply(); };
+  const zoomAt = (f, px, py) => { const k = Math.max(0.15, Math.min(6, S.k * f)); f = k / S.k; S.tx = px - (px - S.tx) * f; S.ty = py - (py - S.ty) * f; S.k = k; apply(); };
+  const center = id => { const n = pos[id]; if (!n) return; const W = svg.clientWidth, H = svg.clientHeight, narrow = innerWidth <= 820;
+    if (S.k < 1.2) S.k = 1.5; S.tx = (narrow ? W / 2 : (W - 420) / 2) - cx(n) * S.k; S.ty = (narrow ? H * 0.2 : H / 2) - cy(n) * S.k; apply(); };
+
+  const pts = new Map(); let moved = 0, pinch0 = null;
+  svg.addEventListener('pointerdown', e => { tip.hidden = true; pts.set(e.pointerId, [e.clientX, e.clientY]); moved = 0; svg.classList.add('drag');
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch0 = Math.hypot(a[0] - b[0], a[1] - b[1]); } });
+  svg.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    const [px, py] = pts.get(e.pointerId), dx = e.clientX - px, dy = e.clientY - py; pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pts.size === 2) { const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]), r = svg.getBoundingClientRect();
+      if (pinch0) zoomAt(d / pinch0, (a[0] + b[0]) / 2 - r.left, (a[1] + b[1]) / 2 - r.top); pinch0 = d; moved += 10; return; }
+    if (moved + Math.abs(dx) + Math.abs(dy) > 5 && !svg.hasPointerCapture(e.pointerId)) svg.setPointerCapture(e.pointerId);
+    moved += Math.abs(dx) + Math.abs(dy); S.tx += dx; S.ty += dy; apply();
+  });
+  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch0 = null; if (!pts.size) svg.classList.remove('drag'); };
+  svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up);
+  svg.addEventListener('wheel', e => { e.preventDefault(); const r = svg.getBoundingClientRect(); zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+  svg.addEventListener('click', e => { if (moved > 5) return; const g = e.target.closest('.node'); select(g ? g.dataset.id : null); });
+  svg.addEventListener('pointerover', e => { const g = e.target.closest('.node'); if (!g || e.pointerType === 'touch') return;
+    const r = g.querySelector('rect').getBoundingClientRect(), b = box.getBoundingClientRect();
+    tip.textContent = qname(g.dataset.id); tip.hidden = false; tip.style.left = (r.left + r.width / 2 - b.left) + 'px'; tip.style.top = (r.bottom - b.top + 4) + 'px'; });
+  svg.addEventListener('pointerout', e => { if (e.target.closest('.node')) tip.hidden = true; });
+  box.querySelector('.maptools').addEventListener('click', e => { const z = e.target.dataset.z; if (!z) return;
+    if (z === 'fit') fit(); else zoomAt(z === 'in' ? 1.4 : 1 / 1.4, svg.clientWidth / 2, svg.clientHeight / 2); });
+  box.querySelector('#lbl').onchange = e => { st.labels = e.target.checked; svg.classList.toggle('nolabel', !st.labels); lastK = 0; layoutLabels(); savePrefs(); };
+
+  function select(id) {
+    svg.querySelectorAll('.node').forEach(g => g.classList.toggle('sel', g.dataset.id === id));
+    svg.querySelectorAll('.edge').forEach(l => { const on = !!id && (l.dataset.a === id || l.dataset.b === id); l.classList.toggle('hl', on); l.classList.toggle('dim', !!id && !on); });
+    if (!id) { side.hidden = true; return; }
+    side.innerHTML = `<button class="btn x" data-close>✕</button>${pCard(id, idx[id], true)}`; side.hidden = false; side.scrollTop = 0;
+  }
+  side.addEventListener('click', e => {
+    if (e.target.closest('[data-close]')) { select(null); return; }
+    const a = e.target.closest('[data-go]'); if (!a) return; e.preventDefault();
+    const k = a.dataset.go; if (pos[k]) { select(k); center(k); } else location.hash = 'q=' + k;
+  });
+  fit();
+  if (focus && pos[focus]) { select(focus); center(focus); }
+}
+
+// ---- 操作 ----
+function rerender(focus) { renderNav(); renderChapter(focus); }
+view.addEventListener('click', e => {
+  const c = e.target.closest('[data-clear]'), u = e.target.closest('[data-undo]');
+  if (c || u) { e.preventDefault(); e.stopPropagation(); c ? clearQuest(c.dataset.clear) : undoQuest(u.dataset.undo); return; }
+  if (e.target.closest('[data-clearall]')) {
+    const ch = CHS.find(x => x.id === st.ch), ids = ch.q.filter(isOpen);
+    const before = new Set([...inBook].filter(isOpen));
+    ids.forEach(id => cleared.add(id));
+    fresh = new Set([...inBook].filter(k => isOpen(k) && !before.has(k)));
+    saveProgress(); rerender(); return;
+  }
+  const v = e.target.closest('[data-v]'); if (v) { st.view = v.dataset.v; savePrefs(); renderChapter(); }
+});
+function route() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  let focus = null;
+  if (h.startsWith('c=')) st.ch = h.slice(2);
+  else if (h.startsWith('q=') || h.startsWith('m=')) {
+    focus = h.slice(2);
+    if (!visible(focus)) { alert(isDone(focus) ? 'クリア済みのクエストは「クリア済みを表示」をオンにすると表示されます。' : 'このクエストはまだ解放されていません。'); focus = null; }
+    else { st.ch = mapOf[focus] || st.ch; if (h[0] === 'm') st.view = 'map'; else st.view = 'list'; }
+  }
+  if (st.ch !== ALL && !CHS.some(c => c.id === st.ch)) st.ch = ALL;
+  rerender(focus);
+}
+window.addEventListener('hashchange', route);
+document.getElementById('mode').addEventListener('click', e => { const m = e.target.dataset.m; if (!m) return; st.mode = m; savePrefs();
+  document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === m)); rerender(); });
+const sd = document.getElementById('showDone'); sd.checked = st.showDone;
+sd.onchange = () => { st.showDone = sd.checked; savePrefs(); rerender(); };
+document.querySelectorAll('[data-opt]').forEach(cb => { cb.checked = st.show[cb.dataset.opt]; cb.onchange = () => { st.show[cb.dataset.opt] = cb.checked; savePrefs(); rerender(); }; });
+document.addEventListener('click', e => document.querySelectorAll('.opts[open]').forEach(o => { if (!o.contains(e.target)) o.open = false; }));
+document.getElementById('theme').onclick = () => { const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; r.dataset.theme = dark ? 'light' : 'dark'; savePrefs(); };
+document.getElementById('reset').onclick = () => { if (!confirm('進行状況をすべて消して最初からやり直します。よろしいですか？')) return; cleared = new Set(); fresh = new Set(); saveProgress(); location.hash = 'c=' + ALL; rerender(); };
+document.getElementById('export').onclick = () => {
+  const blob = new Blob([JSON.stringify({ app: 'gtnh-quest-progress', saved: new Date().toISOString(), cleared: [...cleared] }, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'gtnh_progress.json'; a.click(); URL.revokeObjectURL(a.href);
+};
+const fileIn = document.getElementById('file');
+document.getElementById('import').onclick = () => fileIn.click();
+fileIn.onchange = async () => {
+  const f = fileIn.files[0]; if (!f) return;
+  try { const d = JSON.parse(await f.text()); const ids = (d.cleared || []).filter(id => Q[id]);
+    cleared = new Set(ids); fresh = new Set(); saveProgress(); rerender(); alert(`${ids.length} 件のクリア状況を読み込みました。`); }
+  catch (e) { alert('読み込めませんでした: ' + e.message); }
+  fileIn.value = '';
+};
+document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === st.mode));
+route();
+</script>
+</body>
+</html>
