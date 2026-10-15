@@ -83,6 +83,10 @@ summary .ne{display:block;font-weight:normal;color:var(--muted);font-size:12px}
 mark{background:var(--mark);color:inherit;padding:0 1px;border-radius:2px}
 .hit{margin-bottom:6px}
 .hit .where{font-size:12px;color:var(--muted)}
+.snip{display:block;font-weight:normal;font-size:13px;color:var(--muted);margin-top:3px;line-height:1.6}
+.snip mark{color:var(--text)}
+.snip .lang{font-size:11px;border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-right:4px}
+#scope{padding:4px 6px}
 .empty{color:var(--muted);padding:30px 0}
 footer{color:var(--muted);font-size:12px;margin-top:40px;border-top:1px solid var(--line);padding-top:10px}
 
@@ -148,6 +152,7 @@ main.wide{max-width:none}
     <div class="seg" id="mode">
       <button data-m="ja" class="on">日本語</button><button data-m="both">対訳</button><button data-m="en">English</button>
     </div>
+    <select id="scope" class="btn" title="検索範囲"><option value="all">タイトル＋本文</option><option value="title">タイトルのみ</option></select>
     <select id="filt" class="btn"><option value="">すべて表示</option><option value="1">公式訳のみ</option><option value="2">AI訳のみ</option><option value="0">未訳のみ</option></select>
     <button class="btn" id="expand">すべて開く</button>
     <button class="btn" id="theme" title="テーマ切替">◐</button>
@@ -168,7 +173,7 @@ main.wide{max-width:none}
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
 const Q = D.quests, CH = D.chapters;
-const st = { mode: 'ja', filt: '', ch: CH[0].id, q: '', view: 'list', labels: true };
+const st = { mode: 'ja', filt: '', ch: CH[0].id, q: '', view: 'list', labels: true, scope: 'all' };
 const pass = id => st.filt === '' || String(Q[id].t) === st.filt;
 try { const s = JSON.parse(localStorage.getItem('gtnhqb') || '{}'); if (s.mode) st.mode = s.mode; if (s.view) st.view = s.view; if (s.labels === false) st.labels = false; if (s.theme) document.documentElement.dataset.theme = s.theme; } catch (e) {}
 const save = () => { try { localStorage.setItem('gtnhqb', JSON.stringify({ mode: st.mode, view: st.view, labels: st.labels, theme: document.documentElement.dataset.theme || '' })); } catch (e) {} };
@@ -238,14 +243,14 @@ function renderNav() {
 }
 sel.onchange = () => { location.hash = 'c=' + sel.value; };
 
-function qCard(id, idx, hl, openIt) {
+function qCard(id, idx, hl, openIt, snip) {
   const q = Q[id]; if (!q) return '';
   const nmMain = st.mode === 'en' ? q.ne : (q.nj || q.ne);
   const sub = st.mode === 'both' && q.ne && strip(q.ne) !== strip(q.nj) ? `<span class="ne">${fmt(q.ne, hl)}</span>` : '';
   let body;
   if (st.mode === 'both') body = `<div class="cols"><div><div class="colh">日本語</div><div class="desc">${fmt(q.dj, hl)}</div></div><div><div class="colh">English</div><div class="desc">${fmt(q.de, hl)}</div></div></div>`;
   else body = `<div class="desc">${fmt(st.mode === 'en' ? q.de : q.dj, hl)}</div>`;
-  return `<details class="q" id="q-${id}"${openIt ? ' open' : ''}><summary>${idx != null ? `<span class="num">${idx}</span>` : ''}<span class="nm">${fmt(nmMain, hl)}${sub}</span>${q.t === 0 ? '<span class="badge untr">未訳</span>' : q.t === 2 ? '<span class="badge ai" title="公式訳が無いためAIで翻訳">AI訳</span>' : ''}</summary>
+  return `<details class="q" id="q-${id}"${openIt ? ' open' : ''}><summary>${idx != null ? `<span class="num">${idx}</span>` : ''}<span class="nm">${fmt(nmMain, hl)}${sub}${snip || ''}</span>${q.t === 0 ? '<span class="badge untr">未訳</span>' : q.t === 2 ? '<span class="badge ai" title="公式訳が無いためAIで翻訳">AI訳</span>' : ''}</summary>
     <div class="body">${body}<div class="qid">ID: ${id}${mapOf[id] ? `<a class="tomap" href="#m=${id}">マップで見る</a>` : ''}</div></div></details>`;
 }
 
@@ -272,24 +277,59 @@ function renderChapter(focus) {
   else window.scrollTo(0, 0);
 }
 
+// 検索用のプレーンテキスト: 書式コード・タグを除き、改行は空白に
+const plain = s => (s || '').replace(/§./g, '').replace(/%n/g, ' ').replace(/\[\/?[a-z]+\]/g, '').replace(/\s+/g, ' ').trim();
+const reEsc = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// 本文からヒット箇所の前後を最大 2 か所抜き出す
+function snippets(text, hl, max = 2, span = 36) {
+  const out = []; let m, last = -1; hl.lastIndex = 0;
+  while ((m = hl.exec(text)) && out.length < max) {
+    if (m.index < last) continue;
+    const a = Math.max(0, m.index - span), b = Math.min(text.length, m.index + m[0].length + span);
+    out.push((a > 0 ? '…' : '') + esc(text.slice(a, b)).replace(new RegExp(hl.source, 'gi'), x => `<mark>${x}</mark>`) + (b < text.length ? '…' : ''));
+    last = b;
+  }
+  return out;
+}
+const countHits = (text, re) => { re.lastIndex = 0; return (text.match(re) || []).length; };
+
 function renderSearch() {
   const words = st.q.trim().split(/\s+/).filter(Boolean);
-  const res = words.map(w => new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
-  const hl = new RegExp(words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi');
+  const res = words.map(w => new RegExp(reEsc(w), 'gi'));
+  const hl = new RegExp(words.map(reEsc).join('|'), 'gi');
+  const titleOnly = st.scope === 'title';
   const hits = [];
   for (const c of CH) for (const id of c.q) {
-    if (qChapter[id] !== c.id) continue;
-    const q = Q[id]; if (!pass(id)) continue;
-    const hay = strip(q.nj + '\n' + q.ne + '\n' + q.dj + '\n' + q.de);
-    if (res.every(r => { r.lastIndex = 0; return r.test(hay); })) {
-      const nameHit = res.some(r => { r.lastIndex = 0; return r.test(strip(q.nj + q.ne)); });
-      hits.push([nameHit ? 0 : 1, c, id]);
+    if (qChapter[id] !== c.id || !pass(id)) continue;
+    const q = Q[id];
+    const title = plain(q.nj) + ' ' + plain(q.ne);
+    const body = { ja: plain(q.dj), en: plain(q.de) };
+    const hay = titleOnly ? title : title + ' ' + body.ja + ' ' + body.en;
+    if (!res.every(r => { r.lastIndex = 0; return r.test(hay); })) continue;
+    const nameHit = res.some(r => { r.lastIndex = 0; return r.test(title); });
+    // 表示中の言語の本文を優先してヒット数とスニペットを出す
+    const langs = st.mode === 'en' ? ['en', 'ja'] : st.mode === 'both' ? ['ja', 'en'] : ['ja', 'en'];
+    let n = 0, snip = '';
+    if (!titleOnly) {
+      for (const L of langs) {
+        const k = countHits(body[L], hl);
+        if (!k) continue;
+        n += k;
+        if (!snip) {
+          const tag = (st.mode === 'en' && L === 'ja') || (st.mode !== 'en' && L === 'en') ? `<span class="lang">${L === 'en' ? '英語' : '日本語'}</span>` : '';
+          snip = snippets(body[L], hl).map(s => `<span class="snip">${tag}${s}</span>`).join('');
+        }
+        if (st.mode !== 'both') break;
+      }
     }
+    hits.push({ nameHit, n, c, id, snip });
   }
-  hits.sort((a, b) => a[0] - b[0]);
-  const LIM = 200;
-  view.innerHTML = `<div class="chhead"><h2>検索: ${esc(st.q)}</h2></div><div class="meta">${hits.length} 件${hits.length > LIM ? `（上位 ${LIM} 件を表示）` : ''}</div>` +
-    (hits.slice(0, LIM).map(([, c, id]) => `<div class="hit"><div class="where">${esc(chName(c))}</div>${qCard(id, null, hl, false)}</div>`).join('') || '<div class="empty">見つかりませんでした</div>');
+  hits.sort((a, b) => (b.nameHit - a.nameHit) || (b.n - a.n));
+  const LIM = 200, nTitle = hits.filter(x => x.nameHit).length;
+  view.innerHTML = `<div class="chhead"><h2>検索: ${esc(st.q)}</h2></div>
+    <div class="meta">${hits.length} 件（タイトル一致 ${nTitle} ／ 本文のみ一致 ${hits.length - nTitle}）${hits.length > LIM ? ` ／ 上位 ${LIM} 件を表示` : ''}${titleOnly ? ' ／ 検索範囲: タイトルのみ' : ''}</div>` +
+    (hits.slice(0, LIM).map(x => `<div class="hit"><div class="where">${esc(chName(x.c))}${x.n ? ` ・ 本文 ${x.n} か所` : ''}</div>${qCard(x.id, null, hl, false, x.snip)}</div>`).join('') || '<div class="empty">見つかりませんでした</div>');
   window.scrollTo(0, 0);
 }
 
@@ -471,6 +511,7 @@ document.getElementById('mode').addEventListener('click', e => {
   rerender();
 });
 view.addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (!b) return; st.view = b.dataset.v; save(); renderChapter(); });
+document.getElementById('scope').onchange = e => { st.scope = e.target.value; if (st.q.trim()) renderSearch(); };
 document.getElementById('filt').onchange = e => { st.filt = e.target.value; rerender(); };
 document.getElementById('expand').onclick = e => {
   const all = [...view.querySelectorAll('details.q')], open = !all.every(d => d.open);
