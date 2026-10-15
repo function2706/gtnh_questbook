@@ -18,7 +18,7 @@
     <select id="filt" class="btn"><option value="">すべて表示</option><option value="1">公式訳のみ</option><option value="2">AI訳のみ</option><option value="0">未訳のみ</option></select>
     <button class="btn" id="expand">すべて開く</button>
     <details class="opts"><summary class="btn">表示項目 ▾</summary><div class="menu"><label><input type="checkbox" data-opt="task"> 課題・必要アイテム</label><label><input type="checkbox" data-opt="reward"> 報酬</label><label><input type="checkbox" data-opt="rel"> 前提・後続クエスト</label></div></details>
-    <a class="btn" href="GTNH_QuestProgress.html" style="text-decoration:none">進行モードへ</a>
+    <a class="btn" id="switch" href="GTNH_QuestProgress.html" style="text-decoration:none">進行モードへ</a>
     <button class="btn" id="theme" title="テーマ切替">◐</button>
   </div>
 </header>
@@ -310,6 +310,8 @@ function route() {
   else if (h.startsWith('m=')) { focus = h.slice(2); if (mapOf[focus]) { st.ch = mapOf[focus]; st.view = 'map'; } }
   st.q = ''; document.getElementById('search').value = '';
   renderNav(); renderChapter(focus);
+  // 進行モードへの切り替えリンクに、今開いている章/クエストを引き継ぐ
+  document.getElementById('switch').href = 'GTNH_QuestProgress.html' + (focus ? `#q=${focus}` : `#c=${st.ch}`);
 }
 window.addEventListener('hashchange', route);
 

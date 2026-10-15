@@ -38,6 +38,7 @@ nav .bar i.done{background:var(--c2)}
       <button data-m="ja" class="on">日本語</button><button data-m="both">対訳</button><button data-m="en">English</button>
     </div>
     <label><input type="checkbox" id="showDone"> クリア済みを表示</label>
+    <label title="ゲーム内で普段は隠れているクエスト (可視性 SECRET/HIDDEN、またはトリガーで裏解放される隠しクエスト)"><input type="checkbox" id="special"> 特殊クエストを含める</label>
     <details class="opts"><summary class="btn">表示項目 ▾</summary><div class="menu">
       <label><input type="checkbox" data-opt="task"> 課題・必要アイテム</label>
       <label><input type="checkbox" data-opt="reward"> 報酬</label>
@@ -48,7 +49,7 @@ nav .bar i.done{background:var(--c2)}
       <button class="btn" id="import">読み込み…</button>
       <button class="btn" id="reset">最初からやり直す</button>
     </div></details>
-    <a class="btn" href="GTNH_QuestBook_ja.html" style="text-decoration:none">閲覧モードへ</a>
+    <a class="btn" id="switch" href="GTNH_QuestBook_ja.html" style="text-decoration:none">閲覧モードへ</a>
     <button class="btn" id="theme" title="テーマ切替">◐</button>
     <input type="file" id="file" accept="application/json,.json">
   </div>
@@ -69,23 +70,37 @@ nav .bar i.done{background:var(--c2)}
 <script>
 // ---- 状態 ----
 const ALL = '_avail';  // 擬似章: 全章の「挑戦可能」一覧
-const st = { mode: 'ja', view: 'list', ch: ALL, showDone: true, labels: true, show: { task: true, reward: true, rel: true } };
+const st = { mode: 'ja', view: 'list', ch: ALL, showDone: true, special: false, labels: true, show: { task: true, reward: true, rel: true } };
 let cleared = new Set(), fresh = new Set();
 const PK = 'gtnhqp', DK = 'gtnhqp-progress';
 try {
   const s = JSON.parse(localStorage.getItem(PK) || '{}');
-  ['mode', 'view', 'showDone', 'labels'].forEach(k => { if (k in s) st[k] = s[k]; });
+  ['mode', 'view', 'showDone', 'special', 'labels'].forEach(k => { if (k in s) st[k] = s[k]; });
   if (s.show) Object.assign(st.show, s.show);
   if (s.theme) document.documentElement.dataset.theme = s.theme;
   cleared = new Set((JSON.parse(localStorage.getItem(DK) || '{}').cleared || []).filter(id => Q[id]));
 } catch (e) {}
-const savePrefs = () => { try { localStorage.setItem(PK, JSON.stringify({ mode: st.mode, view: st.view, showDone: st.showDone, labels: st.labels, show: st.show, theme: document.documentElement.dataset.theme || '' })); } catch (e) {} };
+const savePrefs = () => { try { localStorage.setItem(PK, JSON.stringify({ mode: st.mode, view: st.view, showDone: st.showDone, special: st.special, labels: st.labels, show: st.show, theme: document.documentElement.dataset.theme || '' })); } catch (e) {} };
 const saveProgress = () => { try { localStorage.setItem(DK, JSON.stringify({ cleared: [...cleared] })); } catch (e) {} };
 document.getElementById('built').textContent = D.built;
 
 // 進行対象: どこかの章のマップに載っているクエスト (トリガー用の章外クエストは除く)
 const CHS = CH.filter(c => c.map);
-const inBook = new Set(CHS.flatMap(c => c.q));
+// 特殊クエスト: 可視性が SECRET/HIDDEN のもの、または前提がすべてブック外の「Trigger」クエスト
+// (特定アイテムの所持などで裏で解放される隠しクエスト) のもの
+const mapped = new Set(CHS.flatMap(c => c.q));
+const specialKind = id => {
+  const q = Q[id]; if (!q) return '';
+  if (q.d && q.d.vis) return q.d.vis;
+  const p = (q.p || []).map(x => x[0]);
+  return p.length && p.every(x => !mapped.has(x)) ? 'trigger' : '';
+};
+const special = id => !!specialKind(id);
+const VIS_LABEL = { secret: 'シークレット', hidden: '非表示', trigger: '隠し（トリガー解放）' };
+// 進行対象のクエスト集合 (特殊クエストを含めるかで変わる)
+let inBook;
+const computeBook = () => { inBook = new Set(CHS.flatMap(c => c.q).filter(id => st.special || !special(id))); };
+computeBook();
 function chName(c) { return c.id === ALL ? '挑戦可能なクエスト（全章）' : strip(st.mode === 'en' && c.ne ? c.ne : (c.nj || c.ne)); }
 
 // ---- 解放判定 ----
@@ -96,8 +111,8 @@ function unlocked(id) {
   if (!pre.length) return true;
   return (Q[id].d && Q[id].d.pl === 'or') ? pre.some(p => cleared.has(p)) : pre.every(p => cleared.has(p));
 }
-const isDone = id => cleared.has(id);
-const isOpen = id => !cleared.has(id) && unlocked(id);
+const isDone = id => inBook.has(id) && cleared.has(id);
+const isOpen = id => inBook.has(id) && !cleared.has(id) && unlocked(id);
 const visible = id => isOpen(id) || (st.showDone && isDone(id));
 
 function clearQuest(id) {
@@ -120,13 +135,14 @@ function undoQuest(id) {
 // ---- 章ナビ ----
 const nav = document.getElementById('nav'), sel = document.getElementById('chapsel'), view = document.getElementById('view');
 function chStat(c) {
-  let done = 0, open = 0;
-  for (const id of c.q) { if (isDone(id)) done++; else if (unlocked(id)) open++; }
-  return { done, open, n: c.q.length };
+  let done = 0, open = 0, n = 0;
+  for (const id of c.q) { if (!inBook.has(id)) continue; n++; if (isDone(id)) done++; else if (unlocked(id)) open++; }
+  return { done, open, n };
 }
 function renderNav() {
   const totalOpen = [...inBook].filter(isOpen).length;
-  const rows = [`<a href="#c=${ALL}" class="${st.ch === ALL ? 'on' : ''}">挑戦可能なクエスト（全章）<div class="sub"><span class="cnt"><b>${totalOpen}</b> 件</span><span>クリア ${cleared.size} / ${inBook.size}</span></div></a>`];
+  const nDone = [...inBook].filter(isDone).length;
+  const rows = [`<a href="#c=${ALL}" class="${st.ch === ALL ? 'on' : ''}">挑戦可能なクエスト（全章）<div class="sub"><span class="cnt"><b>${totalOpen}</b> 件</span><span>クリア ${nDone} / ${inBook.size}</span></div></a>`];
   const opts = [`<option value="${ALL}">挑戦可能なクエスト（全章・${totalOpen}件）</option>`];
   for (const c of CHS) {
     const s = chStat(c), lock = !s.done && !s.open, pct = s.n ? s.done / s.n * 100 : 0;
@@ -149,8 +165,9 @@ function pCard(id, idx, openIt) {
     ? `<div class="cols"><div><div class="colh">日本語</div><div class="desc">${fmt(q.dj)}</div></div><div><div class="colh">English</div><div class="desc">${fmt(q.de)}</div></div></div>`
     : `<div class="desc">${fmt(st.mode === 'en' ? q.de : q.dj)}</div>`;
   const badge = done ? '<span class="st-badge done">クリア済み</span>' : fresh.has(id) ? '<span class="st-badge new">NEW</span>' : '<span class="st-badge open">挑戦可能</span>';
+  const vis = special(id) ? `<span class="st-badge" title="ゲーム内では普段隠れている特殊クエスト">${VIS_LABEL[specialKind(id)]}</span>` : '';
   const btn = done ? `<button class="qbtn undo" data-undo="${id}">取り消し</button>` : `<button class="qbtn" data-clear="${id}">クリア</button>`;
-  return `<details class="q${done ? ' done' : ''}${fresh.has(id) ? ' fresh' : ''}" id="q-${id}"${openIt ? ' open' : ''}><summary>${idx != null ? `<span class="num">${idx}</span>` : ''}<span class="nm">${fmt(nm)}${sub}</span>${badge}${btn}</summary>
+  return `<details class="q${done ? ' done' : ''}${fresh.has(id) ? ' fresh' : ''}" id="q-${id}"${openIt ? ' open' : ''}><summary>${idx != null ? `<span class="num">${idx}</span>` : ''}<span class="nm">${fmt(nm)}${sub}</span>${vis}${badge}${btn}</summary>
     <div class="body">${body}${extraHtml(id)}<div class="qid">ID: ${id}${mapOf[id] ? `<a class="tomap" href="#m=${id}">マップで見る</a>` : ''}</div></div></details>`;
 }
 
@@ -158,7 +175,7 @@ function pCard(id, idx, openIt) {
 function renderAll(focus) {
   document.querySelector('main').classList.remove('wide');
   const open = [...inBook].filter(isOpen);
-  let html = `<div class="chtop"><div class="chhead"><h2>挑戦可能なクエスト</h2><div class="en">全章で今クリアできるクエスト ${open.length} 件 ／ クリア済み ${cleared.size} / ${inBook.size}</div></div></div>`;
+  let html = `<div class="chtop"><div class="chhead"><h2>挑戦可能なクエスト</h2><div class="en">全章で今クリアできるクエスト ${open.length} 件 ／ クリア済み ${[...inBook].filter(isDone).length} / ${inBook.size}${st.special ? '' : ' ／ 特殊クエストは除外中'}</div></div></div>`;
   if (!cleared.size) html += `<div class="help">前提クエストのないクエストだけが表示されています。「クリア」を押すとそのクエストを達成したことになり、後続クエストが解放されて現れます。進行状況はブラウザに保存されます。</div>`;
   for (const c of CHS) {
     const ids = c.q.filter(id => isOpen(id) && mapOf[id] === c.id);
@@ -289,7 +306,12 @@ function renderMap(c, focus) {
 }
 
 // ---- 操作 ----
-function rerender(focus) { renderNav(); renderChapter(focus); }
+// 閲覧ページへの切り替えリンクに、今開いている章/クエストを引き継ぐ
+function updateSwitch(focus) {
+  const a = document.getElementById('switch');
+  a.href = 'GTNH_QuestBook_ja.html' + (focus ? `#q=${focus}` : st.ch !== ALL ? `#c=${st.ch}` : '');
+}
+function rerender(focus) { renderNav(); renderChapter(focus); updateSwitch(focus); }
 view.addEventListener('click', e => {
   const c = e.target.closest('[data-clear]'), u = e.target.closest('[data-undo]');
   if (c || u) { e.preventDefault(); e.stopPropagation(); c ? clearQuest(c.dataset.clear) : undoQuest(u.dataset.undo); return; }
@@ -308,8 +330,17 @@ function route() {
   if (h.startsWith('c=')) st.ch = h.slice(2);
   else if (h.startsWith('q=') || h.startsWith('m=')) {
     focus = h.slice(2);
-    if (!visible(focus)) { alert(isDone(focus) ? 'クリア済みのクエストは「クリア済みを表示」をオンにすると表示されます。' : 'このクエストはまだ解放されていません。'); focus = null; }
-    else { st.ch = mapOf[focus] || st.ch; if (h[0] === 'm') st.view = 'map'; else st.view = 'list'; }
+    let notice = '';
+    if (!inBook.has(focus)) notice = Q[focus] && special(focus) ? 'このクエストは特殊クエストです。「特殊クエストを含める」をオンにすると表示されます。' : 'このクエストは進行モードの対象外です。';
+    else if (!visible(focus)) notice = isDone(focus) ? 'このクエストはクリア済みです。「クリア済みを表示」をオンにすると表示されます。' : 'このクエストはまだ解放されていません。前提クエストをクリアすると現れます。';
+    st.ch = mapOf[focus] || st.ch;
+    st.view = h[0] === 'm' ? 'map' : 'list';
+    if (notice) {
+      if (st.ch !== ALL && !CHS.some(c => c.id === st.ch)) st.ch = ALL;
+      rerender();
+      view.insertAdjacentHTML('afterbegin', `<div class="help">${esc((Q[focus] ? `「${strip(Q[focus].nj || Q[focus].ne)}」: ` : '') + notice)}</div>`);
+      return;
+    }
   }
   if (st.ch !== ALL && !CHS.some(c => c.id === st.ch)) st.ch = ALL;
   rerender(focus);
@@ -319,6 +350,8 @@ document.getElementById('mode').addEventListener('click', e => { const m = e.tar
   document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === m)); rerender(); });
 const sd = document.getElementById('showDone'); sd.checked = st.showDone;
 sd.onchange = () => { st.showDone = sd.checked; savePrefs(); rerender(); };
+const sp = document.getElementById('special'); sp.checked = st.special;
+sp.onchange = () => { st.special = sp.checked; computeBook(); fresh = new Set(); savePrefs(); rerender(); };
 document.querySelectorAll('[data-opt]').forEach(cb => { cb.checked = st.show[cb.dataset.opt]; cb.onchange = () => { st.show[cb.dataset.opt] = cb.checked; savePrefs(); rerender(); }; });
 document.addEventListener('click', e => document.querySelectorAll('.opts[open]').forEach(o => { if (!o.contains(e.target)) o.open = false; }));
 document.getElementById('theme').onclick = () => { const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; r.dataset.theme = dark ? 'light' : 'dark'; savePrefs(); };

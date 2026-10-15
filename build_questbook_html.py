@@ -188,6 +188,11 @@ def load_details():
         # 前提クエストの条件 (OR = どれか1つ完了で解放)
         if props.get("questLogic:8", "AND") == "OR":
             d["pl"] = "or"
+        # 特殊な可視性 (SECRET=シークレット, HIDDEN=非表示)。
+        # UNLOCKED は化学系など通常の進行ルートでも使われているので特殊扱いしない
+        vis = props.get("visibility:8", "NORMAL")
+        if vis in ("SECRET", "HIDDEN"):
+            d["vis"] = vis.lower()
         details[bq_id(q["questIDHigh:4"], q["questIDLow:4"])] = d
 
     names = {}
