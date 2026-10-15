@@ -73,14 +73,17 @@ const ALL = '_avail';  // 擬似章: 全章の「挑戦可能」一覧
 const st = { mode: 'ja', view: 'list', ch: ALL, showDone: true, special: false, labels: true, show: { task: true, reward: true, rel: true } };
 let cleared = new Set(), fresh = new Set();
 const PK = 'gtnhqp', DK = 'gtnhqp-progress';
+loadSharedPrefs(st);  // 閲覧ページと共通の設定 (テーマ・言語表示・表示項目など)
 try {
+  // 進行ページ固有の設定
   const s = JSON.parse(localStorage.getItem(PK) || '{}');
-  ['mode', 'view', 'showDone', 'special', 'labels'].forEach(k => { if (k in s) st[k] = s[k]; });
-  if (s.show) Object.assign(st.show, s.show);
-  if (s.theme) document.documentElement.dataset.theme = s.theme;
+  ['showDone', 'special'].forEach(k => { if (k in s) st[k] = s[k]; });
   cleared = new Set((JSON.parse(localStorage.getItem(DK) || '{}').cleared || []).filter(id => Q[id]));
 } catch (e) {}
-const savePrefs = () => { try { localStorage.setItem(PK, JSON.stringify({ mode: st.mode, view: st.view, showDone: st.showDone, special: st.special, labels: st.labels, show: st.show, theme: document.documentElement.dataset.theme || '' })); } catch (e) {} };
+const savePrefs = () => {
+  saveSharedPrefs(st);
+  try { localStorage.setItem(PK, JSON.stringify({ showDone: st.showDone, special: st.special })); } catch (e) {}
+};
 const saveProgress = () => { try { localStorage.setItem(DK, JSON.stringify({ cleared: [...cleared] })); } catch (e) {} };
 document.getElementById('built').textContent = D.built;
 

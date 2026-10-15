@@ -126,3 +126,25 @@ function extraHtml(id) {
   return out.length ? `<div class="xinfo">${out.join('')}</div>` : '';
 }
 
+
+// ---- 両ページ共通の表示設定 (テーマ・言語表示・表示項目・マップの名前・リスト/マップ) ----
+const PREF_KEY = 'gtnhq-prefs';
+function loadSharedPrefs(st) {
+  try {
+    // 旧バージョンのページ別設定があれば初回だけ引き継ぐ
+    const s = JSON.parse(localStorage.getItem(PREF_KEY) || localStorage.getItem('gtnhqb') || '{}');
+    if (s.mode) st.mode = s.mode;
+    if (s.view) st.view = s.view;
+    if (s.labels === false) st.labels = false;
+    if (s.show) Object.assign(st.show, s.show);
+    if (s.theme) document.documentElement.dataset.theme = s.theme;
+  } catch (e) {}
+}
+function saveSharedPrefs(st) {
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify({ mode: st.mode, view: st.view, labels: st.labels, show: st.show,
+      theme: document.documentElement.dataset.theme || '' }));
+  } catch (e) {}
+}
+// 「戻る」でキャッシュから復元されたときは、もう一方のページで変えた設定を反映するため読み込み直す
+window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
