@@ -91,6 +91,12 @@ mark{background:var(--mark);color:inherit;padding:0 1px;border-radius:2px}
 footer{color:var(--muted);font-size:12px;margin-top:40px;border-top:1px solid var(--line);padding-top:10px}
 
 
+/* ---- フォーム部品 (ダークモードでも読めるように) ---- */
+:root{color-scheme:light}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){color-scheme:dark} }
+:root[data-theme="dark"]{color-scheme:dark}
+select, option{background:var(--panel);color:var(--text)}
+
 /* ---- 課題・報酬・前提 ---- */
 .opts{position:relative}
 .opts>summary{list-style:none;cursor:pointer}
@@ -102,6 +108,7 @@ footer{color:var(--muted);font-size:12px;margin-top:40px;border-top:1px solid va
 .xsec h5 .logic{font-weight:normal;margin-left:6px}
 .task{margin:4px 0;font-size:14px}
 .tag{display:inline-block;font-size:11px;line-height:1.5;padding:0 6px;border-radius:9px;border:1px solid var(--line);color:var(--muted);margin-right:4px;vertical-align:1px}
+.task>.tag:not(:first-child){margin-left:6px}
 .tag.req{border-color:var(--accent);color:var(--accent)}
 .tag.opt{border-color:var(--c9);color:var(--c9)}
 .tag.use{border-color:var(--c4);color:var(--c4)}
