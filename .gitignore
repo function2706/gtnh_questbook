@@ -7,3 +7,5 @@ src/modpack/
 dist/
 # 同期 GUI の反映先フォルダの記憶
 sync_gui_settings.json
+# NEI のダンプ (ゲームから出力、サイズ大)
+src/dumps/
