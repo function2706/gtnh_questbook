@@ -3,3 +3,7 @@ __pycache__/
 src/modpack/
 *.bak
 *.tmp
+# ゲーム用 lang は build で生成
+dist/
+# 同期 GUI の反映先フォルダの記憶
+sync_gui_settings.json

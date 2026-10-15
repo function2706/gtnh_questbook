@@ -204,11 +204,35 @@ def load_details():
     return details, reg, names
 
 
+GAME_LANG = HERE / "dist" / "config" / "txloader" / "forceload" / "betterquesting" / "lang" / "ja_JP.lang"
+
+
+def write_game_lang(ja_text, ja, ai_used):
+    """ゲームに入れる ja_JP.lang を出力する。
+
+    公式の ja_JP.lang を行単位でそのまま写し、公式訳が英語のままの項目だけ AI 訳に差し替える
+    (コメント・並び順・lang のエスケープ表記は公式ファイルのまま)。
+    出力先は .minecraft と同じ構成: dist/config/txloader/forceload/betterquesting/lang/ja_JP.lang
+    """
+    out, n = [], 0
+    for line in ja_text.splitlines():
+        m = KEY_RE.match(line)
+        if m and (m.group(1), m.group(2), m.group(3)) in ai_used:
+            k = (m.group(1), m.group(2), m.group(3))
+            line = f"betterquesting.{k[0]}.{k[1]}.{k[2]}={ja[k]}"
+            n += 1
+        out.append(line)
+    GAME_LANG.parent.mkdir(parents=True, exist_ok=True)
+    GAME_LANG.write_text("\n".join(out) + "\n", encoding="utf-8")
+    print(f"game lang: AI訳で補完 {n} 項目 -> {GAME_LANG}")
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")  # sync_gui から呼ばれたとき日本語ログを化けさせない
     ja_src = sys.argv[1] if len(sys.argv) > 2 else BASE + JA_PATH
     en_src = sys.argv[2] if len(sys.argv) > 2 else BASE + EN_PATH
-    ja, chapters = parse(read_text(ja_src))
+    ja_text = read_text(ja_src)
+    ja, chapters = parse(ja_text)
     en, _ = parse(read_text(en_src))
     # AI訳 (work/out/*.lang) で、公式訳が英語のままの項目だけを埋める
     ai = {}
@@ -226,6 +250,7 @@ def main():
         if k in en and ja.get(k) == en[k] and k not in stale:
             ja[k] = v
             ai_used.add(k)
+    write_game_lang(ja_text, ja, ai_used)
 
     def entry(kind, qid):
         nj, ne = ja.get((kind, qid, "name"), ""), en.get((kind, qid, "name"), "")
