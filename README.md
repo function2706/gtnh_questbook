@@ -160,6 +160,8 @@ python build_questbook_html.py src/ja_JP.lang src/en_US.lang   # 手元のファ
 4. `python unify_terms.py` … 《訳／原文》表記の訳語ゆれを最頻の訳に統一
 5. `python build_questbook_html.py` … 生成
 
+**同期後に少しだけ未訳が出たとき**（英文の書き換えなど）は、`split_untranslated.py` は使わず、未訳分だけを `work/in/zz_upd<日付>.lang` に抜き出して訳し、`work/out/zz_upd<日付>_pNN.lang` に保存します（例：2026-11-01 の `zz_upd20261101`）。`zz_` で始めるのは、既存の作業ファイルより後に読ませて、新しい英文・新しい訳を優先させるためです。検証は `python check_translation.py zz_upd<日付>`。
+
 ### ファイル構成
 | パス | 内容 |
 |---|---|
